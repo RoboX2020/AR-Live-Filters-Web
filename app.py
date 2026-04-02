@@ -3,14 +3,16 @@ import numpy as np
 import os
 import av
 import streamlit as st
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
-# Absolute path resolution for Streamlit Cloud deployment
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "hand_landmarker.task")
+# --- ROBUST MEDIAPIPE LOADER ---
+# Gracefully disable MediaPipe if Streamlit's Linux Server (Python 3.14/Trixie) fails the C++ ABI linkage
+MEDIAPIPE_AVAILABLE = False
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError as e:
+    print("WARNING: MediaPipe C++ bindings failed to load on this server:", e)
 
 # ─────────────────────────────────────────────
 # Filter Functions (Identical to local version)
@@ -151,16 +153,21 @@ class LiveFilterProcessor(VideoProcessorBase):
     def __init__(self):
         self.filter_type = "ANIME / CARTOON"
         self.enable_region = False
+        self.hand_detector = None
         
-        # Initialize Mediapipe via the classic 'solutions' API
-        # This completely bypasses the .tasks C++ dynamic ABI errors in Streamlit cloud
-        self.mp_hands = mp.solutions.hands
-        self.hand_detector = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        # Initialize Mediapipe via the classic 'solutions' API if available
+        if MEDIAPIPE_AVAILABLE:
+            try:
+                self.mp_hands = mp.solutions.hands
+                self.hand_detector = self.mp_hands.Hands(
+                    static_image_mode=False,
+                    max_num_hands=2,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+            except Exception as e:
+                print("Failed to initialize internal MediaPipe hands:", e)
+                self.hand_detector = None
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -174,18 +181,21 @@ class LiveFilterProcessor(VideoProcessorBase):
         except Exception:
             filtered = img.copy()
 
-        # 2. Region Magic (Render only inside hand if active)
+        # 2. Region Magic (Render only inside hand if active AND MediaPipe didn't crash)
         active_quad = None
         if self.enable_region and self.hand_detector:
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            results = self.hand_detector.process(img_rgb)
-            
-            if results.multi_hand_landmarks and len(results.multi_hand_landmarks) >= 2:
-                finger_pts = []
-                for hand_lm in results.multi_hand_landmarks[:2]:
-                    finger_pts.append((int(hand_lm.landmark[4].x * w), int(hand_lm.landmark[4].y * h)))
-                    finger_pts.append((int(hand_lm.landmark[8].x * w), int(hand_lm.landmark[8].y * h)))
-                active_quad = order_quad(finger_pts)
+            try:
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                results = self.hand_detector.process(img_rgb)
+                
+                if results.multi_hand_landmarks and len(results.multi_hand_landmarks) >= 2:
+                    finger_pts = []
+                    for hand_lm in results.multi_hand_landmarks[:2]:
+                        finger_pts.append((int(hand_lm.landmark[4].x * w), int(hand_lm.landmark[4].y * h)))
+                        finger_pts.append((int(hand_lm.landmark[8].x * w), int(hand_lm.landmark[8].y * h)))
+                    active_quad = order_quad(finger_pts)
+            except Exception:
+                pass # Fail silently during high-speed thread loops
 
         if active_quad is not None:
             quad_np = np.array(active_quad, dtype=np.int32)
@@ -215,8 +225,12 @@ with col1:
     filter_choice = st.selectbox("Select Filter Effect", list(FILTERS.keys()))
 with col2:
     st.markdown("<br/>", unsafe_allow_html=True)
-    region_toggle = st.checkbox("🔮 Magic Region Mode (Requires 2 Hands)")
-    st.caption("Show both hands (thumb + index) to create a glowing magic window!")
+    if MEDIAPIPE_AVAILABLE:
+        region_toggle = st.checkbox("🔮 Magic Region Mode (Requires 2 Hands)")
+        st.caption("Show both hands (thumb + index) to create a glowing magic window!")
+    else:
+        st.error("Magic Region Mode disabled: Linux MediaPipe driver conflict on host.")
+        region_toggle = False
 
 ctx = webrtc_streamer(
     key="live-filters",
