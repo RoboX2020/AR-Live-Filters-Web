@@ -152,18 +152,15 @@ class LiveFilterProcessor(VideoProcessorBase):
         self.filter_type = "ANIME / CARTOON"
         self.enable_region = False
         
-        # Initialize Mediapipe
-        if os.path.exists(MODEL_PATH):
-            base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
-            hand_options = vision.HandLandmarkerOptions(
-                base_options=base_options, num_hands=2,
-                min_hand_detection_confidence=0.5,
-                min_hand_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
-                running_mode=vision.RunningMode.IMAGE)
-            self.hand_detector = vision.HandLandmarker.create_from_options(hand_options)
-        else:
-            self.hand_detector = None
+        # Initialize Mediapipe via the classic 'solutions' API
+        # This completely bypasses the .tasks C++ dynamic ABI errors in Streamlit cloud
+        self.mp_hands = mp.solutions.hands
+        self.hand_detector = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -181,14 +178,13 @@ class LiveFilterProcessor(VideoProcessorBase):
         active_quad = None
         if self.enable_region and self.hand_detector:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-            results = self.hand_detector.detect(mp_image)
+            results = self.hand_detector.process(img_rgb)
             
-            if results.hand_landmarks and len(results.hand_landmarks) >= 2:
+            if results.multi_hand_landmarks and len(results.multi_hand_landmarks) >= 2:
                 finger_pts = []
-                for hand_lm in results.hand_landmarks[:2]:
-                    finger_pts.append((int(hand_lm[4].x * w), int(hand_lm[4].y * h)))
-                    finger_pts.append((int(hand_lm[8].x * w), int(hand_lm[8].y * h)))
+                for hand_lm in results.multi_hand_landmarks[:2]:
+                    finger_pts.append((int(hand_lm.landmark[4].x * w), int(hand_lm.landmark[4].y * h)))
+                    finger_pts.append((int(hand_lm.landmark[8].x * w), int(hand_lm.landmark[8].y * h)))
                 active_quad = order_quad(finger_pts)
 
         if active_quad is not None:
