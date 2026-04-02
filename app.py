@@ -8,7 +8,9 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
-MODEL_PATH = "hand_landmarker.task"
+# Absolute path resolution for Streamlit Cloud deployment
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "hand_landmarker.task")
 
 # ─────────────────────────────────────────────
 # Filter Functions (Identical to local version)
