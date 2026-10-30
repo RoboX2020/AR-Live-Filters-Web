@@ -1,3 +1,9 @@
+# ============================================================================
+# app.py - a fun-mirror web app: your webcam feed with live cartoon filters
+# (anime, x-ray, thermal, neon edges, pencil sketch, oil painting, pixel
+# art, glitch). Each filter below is a small OpenCV recipe that rewrites
+# every frame before it is shown. Pick a filter, watch yourself change.
+# ============================================================================
 import cv2
 import numpy as np
 import os
