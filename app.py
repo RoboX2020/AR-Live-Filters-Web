@@ -23,34 +23,46 @@ except ImportError as e:
 # ─────────────────────────────────────────────
 # Filter Functions (Identical to local version)
 # ─────────────────────────────────────────────
+# # Cartoon look: flatten colors, boost vividness, ink black outlines.
 def anime_filter(frame):
+    # # Smooth colors while keeping edges sharp (bilateral filter x3) - the
+    # # flat-color cartoon base.
     smooth = frame.copy()
     for _ in range(3):
         smooth = cv2.bilateralFilter(smooth, 9, 75, 75)
+    # # Posterize: round every color to the nearest step of 32, so only a few
+    # # bold colors survive.
     div = 32
     quantized = (smooth // div) * div + div // 2
+    # # Boost saturation (and a bit of brightness) for vivid comic colors.
     hsv = cv2.cvtColor(quantized, cv2.COLOR_BGR2HSV)
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.4, 0, 255).astype(np.uint8)
     hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.1, 0, 255).astype(np.uint8)
     vivid = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    # # Find outlines and keep them black; bitwise_and inks them over the colors.
     edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 5)
     edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
     return cv2.bitwise_and(vivid, edges_bgr)
 
+# # X-ray look: inverted grayscale, enhanced contrast, blue tint and glow.
 def xray_filter(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # # Invert brightness (dark becomes light) like an x-ray negative.
     inverted = cv2.bitwise_not(gray)
     clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(inverted)
+    # # Find strong edges and thicken them a little (dilate) so bones 'pop'.
     edges = cv2.Canny(gray, 30, 100)
     edges = cv2.dilate(edges, None, iterations=1)
     result = cv2.addWeighted(enhanced, 0.8, edges, 0.5, 0)
     colored = np.zeros_like(frame)
+    # # Tint channel by channel: full blue, less green, little red = cold blue.
     colored[:, :, 0] = np.clip(result * 1.0, 0, 255).astype(np.uint8)
     colored[:, :, 1] = np.clip(result * 0.8, 0, 255).astype(np.uint8)
     colored[:, :, 2] = np.clip(result * 0.3, 0, 255).astype(np.uint8)
+    # # Add a soft greenish glow around bright areas.
     bright = cv2.GaussianBlur(result, (15, 15), 0)
     glow = np.zeros_like(frame)
     glow[:, :, 0] = np.clip(bright * 0.3, 0, 255).astype(np.uint8)
@@ -58,6 +70,7 @@ def xray_filter(frame):
     glow[:, :, 2] = np.clip(bright * 0.1, 0, 255).astype(np.uint8)
     return cv2.add(colored, glow)
 
+# # Fake heat camera: brightness becomes color (blue = cold, red = hot).
 def thermal_filter(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -65,9 +78,11 @@ def thermal_filter(frame):
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     return cv2.applyColorMap(gray, cv2.COLORMAP_JET)
 
+# # Neon look: only the outlines, glowing blue/purple on a near-black scene.
 def neon_edges_filter(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    # # Find outlines twice: strong ones (bright) and faint ones (dimmer purple).
     edges1 = cv2.Canny(gray, 50, 150)
     edges2 = cv2.Canny(gray, 20, 80)
     edges1 = cv2.dilate(edges1, None, iterations=1)
@@ -77,15 +92,20 @@ def neon_edges_filter(frame):
     result[:, :, 1] = np.clip(edges1.astype(np.int16) * 0.9, 0, 255).astype(np.uint8)
     result[:, :, 2] = np.clip(result[:, :, 2].astype(np.int16) + edges2.astype(np.int16) * 0.8, 0, 255).astype(np.uint8)
     result[:, :, 0] = np.clip(result[:, :, 0].astype(np.int16) + edges2.astype(np.int16) * 0.3, 0, 255).astype(np.uint8)
+    # # Blur a copy and add it back - that halo is the neon glow.
     glow = cv2.GaussianBlur(result, (9, 9), 0)
     result = cv2.add(result, glow)
+    # # Keep a very dim version of the real scene underneath the glow.
     dark_bg = cv2.convertScaleAbs(frame, alpha=0.1, beta=0)
     return cv2.add(result, dark_bg)
 
+# # Pencil sketch: the classic divide-by-blurred-negative trick.
 def pencil_sketch_filter(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     inv = cv2.bitwise_not(gray)
     blur = cv2.GaussianBlur(inv, (21, 21), 0)
+    # # Dividing the image by its blurred negative flattens lit areas to white
+    # # and leaves edges dark - exactly like pencil strokes.
     sketch = cv2.divide(gray, cv2.bitwise_not(blur), scale=256)
     colored = np.zeros_like(frame)
     colored[:, :, 0] = np.clip(sketch * 0.85, 0, 255).astype(np.uint8)
@@ -93,7 +113,9 @@ def pencil_sketch_filter(frame):
     colored[:, :, 2] = np.clip(sketch * 0.95, 0, 255).astype(np.uint8)
     return colored
 
+# # Oil painting: heavy edge-preserving smoothing, richer colors, dark outlines.
 def oil_painting_filter(frame):
+    # # Smooth repeatedly while preserving edges - the painted-strokes look.
     result = frame.copy()
     for _ in range(4):
         result = cv2.bilateralFilter(result, 9, 75, 75)
@@ -106,26 +128,35 @@ def oil_painting_filter(frame):
     edges_3ch = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
     return cv2.bitwise_and(result, edges_3ch)
 
+# # Pixel art: shrink to a tiny grid, reduce colors, blow back up with hard pixels.
 def pixel_art_filter(frame):
     pixel_size = 8
     h, w = frame.shape[:2]
+    # # Downscale to a tiny grid; upscaling with INTER_NEAREST keeps hard square
+    # # pixels instead of a blurry zoom - instant 8-bit.
     small = cv2.resize(frame, (w // pixel_size, h // pixel_size), interpolation=cv2.INTER_LINEAR)
     div = 48
+    # # Reduce the color palette as well, for the retro-game look.
     quantized = (small // div) * div + div // 2
     return cv2.resize(quantized, (w, h), interpolation=cv2.INTER_NEAREST)
 
+# # Glitch: shift color channels sideways, shove random strips, sometimes
+# # invert a block - digital corruption on purpose.
 def glitch_filter(frame):
     h, w = frame.shape[:2]
     result = frame.copy()
+    # # Slide the red and blue channels left/right by random amounts (color fringing).
     shift_r = np.random.randint(-15, 15)
     shift_b = np.random.randint(-15, 15)
     result[:, :, 2] = np.roll(frame[:, :, 2], shift_r, axis=1)
     result[:, :, 0] = np.roll(frame[:, :, 0], shift_b, axis=1)
+    # # Slice a few random horizontal strips and shove them sideways.
     for _ in range(5):
         y = np.random.randint(0, h)
         thickness = np.random.randint(1, 4)
         shift = np.random.randint(-30, 30)
         result[y:y+thickness] = np.roll(result[y:y+thickness], shift, axis=1)
+    # # Sometimes flip a random block's colors for extra corruption.
     if np.random.random() < 0.3:
         bx = np.random.randint(0, max(1, w - 50))
         by = np.random.randint(0, max(1, h - 20))
@@ -146,6 +177,8 @@ FILTERS = {
     "GLITCH": glitch_filter,
 }
 
+# # Sort 4 corner points into a consistent top-left, top-right,
+# # bottom-right, bottom-left order.
 def order_quad(pts):
     pts = sorted(pts, key=lambda p: p[1])
     top_two = sorted(pts[:2], key=lambda p: p[0])
@@ -155,6 +188,8 @@ def order_quad(pts):
 # ─────────────────────────────────────────────
 # Streamlit WebRTC Processor
 # ─────────────────────────────────────────────
+# # The webcam loop: streamlit-webrtc hands us every frame, we run the
+# # chosen filter (optionally only where your hand is) and show the result.
 class LiveFilterProcessor(VideoProcessorBase):
     def __init__(self):
         self.filter_type = "ANIME / CARTOON"
